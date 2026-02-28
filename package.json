@@ -1,6 +1,6 @@
 {
   "name": "@lifestreamdynamics/booking-widget",
-  "version": "0.0.0",
+  "version": "0.1.0",
   "type": "module",
   "main": "dist/lsv-booking.umd.cjs",
   "module": "dist/lsv-booking.js",
