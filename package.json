@@ -1,16 +1,37 @@
 {
   "name": "@lifestreamdynamics/booking-widget",
   "version": "0.1.0",
+  "description": "Embeddable booking widget Web Component for Lifestream Vault",
   "type": "module",
   "main": "dist/lsv-booking.umd.cjs",
   "module": "dist/lsv-booking.js",
   "types": "dist/index.d.ts",
-  "files": ["dist"],
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/lsv-booking.js",
+      "require": "./dist/lsv-booking.umd.cjs"
+    }
+  },
+  "sideEffects": true,
+  "files": ["dist", "README.md"],
+  "keywords": ["lifestream", "vault", "booking", "widget", "web-component", "custom-element"],
+  "author": "Lifestream Dynamics <eric@lifestreamdynamics.com>",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/lifestreamdynamics/lifestream-vault-booking-widget.git"
+  },
+  "bugs": {
+    "url": "https://github.com/lifestreamdynamics/lifestream-vault-booking-widget/issues"
+  },
+  "homepage": "https://github.com/lifestreamdynamics/lifestream-vault-booking-widget#readme",
   "scripts": {
     "build": "vite build",
     "dev": "vite build --watch",
     "test": "vitest run",
-    "test:watch": "vitest"
+    "test:watch": "vitest",
+    "prepublishOnly": "npm run build && npm test"
   },
   "devDependencies": {
     "typescript": "^5.7.3",
