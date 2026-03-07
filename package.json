@@ -1,6 +1,6 @@
 {
   "name": "@lifestreamdynamics/booking-widget",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "Embeddable booking widget Web Component for Lifestream Vault",
   "type": "module",
   "main": "dist/lsv-booking.umd.cjs",
@@ -14,8 +14,18 @@
     }
   },
   "sideEffects": true,
-  "files": ["dist", "README.md"],
-  "keywords": ["lifestream", "vault", "booking", "widget", "web-component", "custom-element"],
+  "files": [
+    "dist",
+    "README.md"
+  ],
+  "keywords": [
+    "lifestream",
+    "vault",
+    "booking",
+    "widget",
+    "web-component",
+    "custom-element"
+  ],
   "author": "Lifestream Dynamics <eric@lifestreamdynamics.com>",
   "license": "MIT",
   "repository": {
