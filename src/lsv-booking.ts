@@ -27,6 +27,7 @@ export class LsvBooking extends HTMLElement {
   static observedAttributes = ['api-url', 'profile-slug', 'vault-slug', 'theme'];
 
   private root: ShadowRoot;
+  private abortController: AbortController | null = null;
   private step: Step = 'slots';
   private slots: Slot[] = [];
   private selectedSlot: Slot | null = null;
@@ -42,8 +43,15 @@ export class LsvBooking extends HTMLElement {
   }
 
   connectedCallback() {
+    this.abortController = new AbortController();
+    this.root.addEventListener('click', this.handleRootClick, { signal: this.abortController.signal });
     this.render();
-    this.loadSlots();
+    void this.loadSlots();
+  }
+
+  disconnectedCallback() {
+    this.abortController?.abort();
+    this.abortController = null;
   }
 
   attributeChangedCallback(name: string, oldVal: string | null, newVal: string | null) {
@@ -85,7 +93,7 @@ export class LsvBooking extends HTMLElement {
     this.isLoading = false;
     this.errorMsg = '';
     this.render();
-    this.loadSlots();
+    void this.loadSlots();
   }
 
   private setLoading(loading: boolean) {
@@ -104,7 +112,7 @@ export class LsvBooking extends HTMLElement {
   private async loadSlots() {
     this.setLoading(true);
     try {
-      const res = await fetch(`${this.baseApiPath}/booking-slots`);
+      const res = await fetch(`${this.baseApiPath}/booking-slots`, { signal: this.abortController?.signal });
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
       const data = await res.json() as { slots: Slot[] };
       this.slots = data.slots;
@@ -122,6 +130,7 @@ export class LsvBooking extends HTMLElement {
     try {
       const res = await fetch(
         `${this.baseApiPath}/booking-slots/${slotId}/availability?date=${date}`,
+        { signal: this.abortController?.signal },
       );
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
       const data = await res.json() as { times: string[] };
@@ -147,6 +156,7 @@ export class LsvBooking extends HTMLElement {
     this.setLoading(true);
 
     // Build ISO startAt from date + time
+    // API interprets startAt as UTC ISO string — timezone offset is intentional
     const startAt = new Date(`${this.selectedDate}T${this.selectedTime}`).toISOString();
     const slotId = this.selectedSlot.id;
 
@@ -165,6 +175,7 @@ export class LsvBooking extends HTMLElement {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify(body),
+          signal: this.abortController?.signal,
         },
       );
       if (!res.ok) {
@@ -206,8 +217,7 @@ export class LsvBooking extends HTMLElement {
     today.setHours(0, 0, 0, 0);
 
     for (let i = 0; i < 14; i++) {
-      const d = new Date(today);
-      d.setDate(today.getDate() + i);
+      const d = new Date(today.getTime() + i * 86400000);
       const iso = d.toISOString().split('T')[0];
       const label = d.toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
       results.push({ date: iso, label, dayOfWeek: d.getDay() });
@@ -607,14 +617,14 @@ export class LsvBooking extends HTMLElement {
 
   // ── Event handling ────────────────────────────────────────────────────────
 
-  private attachEvents() {
-    this.root.addEventListener('click', (e) => {
-      const target = e.target as HTMLElement;
-      const el = target.closest('[data-action]') as HTMLElement | null;
-      if (!el) return;
-      this.handleAction(el.dataset.action ?? '', el);
-    });
+  private handleRootClick = (e: Event) => {
+    const target = e.target as HTMLElement;
+    const el = target.closest('[data-action]') as HTMLElement | null;
+    if (!el) return;
+    this.handleAction(el.dataset.action ?? '', el);
+  };
 
+  private attachEvents() {
     const form = this.root.querySelector<HTMLFormElement>('#lsv-booking-form');
     if (form) {
       form.addEventListener('submit', (e) => {
@@ -635,7 +645,7 @@ export class LsvBooking extends HTMLElement {
       case 'retry':
         this.errorMsg = '';
         if (this.step === 'slots') {
-          this.loadSlots();
+          void this.loadSlots();
         } else if (this.step === 'time' && this.selectedSlot) {
           void this.loadTimes(this.selectedSlot.id, this.selectedDate);
         } else {
