@@ -243,3 +243,218 @@ describe('Custom element registration check', () => {
     expect(typeof LsvBooking.prototype.attributeChangedCallback).toBe('function');
   });
 });
+
+// ── Helpers for integration-style tests ──────────────────────────────────────
+
+/**
+ * Build a minimal context object for API-method tests, following the same
+ * pattern as makeCtx above. Uses an EventTarget so event listeners work
+ * correctly. Avoids `new LsvBooking()` because jsdom requires custom elements
+ * to be registered in the registry before construction.
+ */
+interface ApiCtx extends LsvBooking {
+  _et: EventTarget;
+}
+
+function makeApiCtx(overrides: Record<string, unknown> = {}): ApiCtx {
+  const et = new EventTarget();
+  const ctx = {
+    // Attribute-based getters — return fixed values for tests
+    apiUrl: 'https://api.test',
+    profileSlug: 'jane',
+    vaultSlug: 'consult',
+    get baseApiPath() {
+      return `${this.apiUrl}/api/v1/public/vaults/${this.profileSlug}/${this.vaultSlug}`;
+    },
+    // Widget state
+    selectedSlot: null,
+    selectedDate: '',
+    selectedTime: '',
+    availableTimes: [],
+    isLoading: false,
+    errorMsg: '',
+    step: 'slots',
+    abortController: null,
+    // Render stubs — don't call real render
+    render: vi.fn(),
+    setLoading(loading: boolean) {
+      (this as unknown as Record<string, unknown>).isLoading = loading;
+      (this as unknown as Record<string, unknown>).render();
+    },
+    setError(msg: string) {
+      (this as unknown as Record<string, unknown>).errorMsg = msg;
+      (this as unknown as Record<string, unknown>).isLoading = false;
+      (this as unknown as Record<string, unknown>).render();
+    },
+    // getSignal — real implementation; AbortSignal.timeout is available in Node 22
+    getSignal(timeoutMs = 15_000) {
+      return AbortSignal.timeout(timeoutMs);
+    },
+    // Delegate event methods to the EventTarget
+    addEventListener: et.addEventListener.bind(et),
+    removeEventListener: et.removeEventListener.bind(et),
+    dispatchEvent: et.dispatchEvent.bind(et),
+    // Keep reference so tests can also add listeners to _et
+    _et: et,
+    ...overrides,
+  } as unknown as ApiCtx;
+  return ctx;
+}
+
+const slotFixture = {
+  id: 'slot-1',
+  title: 'Consult',
+  durationMin: 30,
+  bufferMin: 0,
+  startTime: '09:00',
+  endTime: '17:00',
+  daysOfWeek: ['mon'],
+  timezone: 'UTC',
+  maxConcurrent: 1,
+  requirePhone: false,
+};
+
+// ── API integration tests ─────────────────────────────────────────────────────
+
+describe('API integration', () => {
+  let originalFetch: typeof globalThis.fetch;
+
+  beforeEach(() => {
+    originalFetch = globalThis.fetch;
+  });
+
+  afterEach(() => {
+    globalThis.fetch = originalFetch;
+    vi.restoreAllMocks();
+  });
+
+  it('calls correct endpoint for loadSlots', async () => {
+    const mockFetch = vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({ slots: [] }),
+    });
+    globalThis.fetch = mockFetch;
+
+    const ctx = makeApiCtx();
+
+    await (LsvBooking.prototype as unknown as {
+      loadSlots: () => Promise<void>;
+    }).loadSlots.call(ctx);
+
+    expect(mockFetch).toHaveBeenCalledWith(
+      'https://api.test/api/v1/public/vaults/jane/consult/booking-slots',
+      expect.objectContaining({ signal: expect.anything() }),
+    );
+  });
+
+  it('calls correct endpoint for loadTimes', async () => {
+    const mockFetch = vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({ times: ['09:00', '10:00'] }),
+    });
+    globalThis.fetch = mockFetch;
+
+    const ctx = makeApiCtx();
+
+    await (LsvBooking.prototype as unknown as {
+      loadTimes: (slotId: string, date: string) => Promise<void>;
+    }).loadTimes.call(ctx, 'slot-1', '2026-04-15');
+
+    expect(mockFetch).toHaveBeenCalledWith(
+      expect.stringContaining('/booking-slots/slot-1/availability?date=2026-04-15'),
+      expect.anything(),
+    );
+  });
+});
+
+// ── Error handling tests ──────────────────────────────────────────────────────
+
+describe('error handling', () => {
+  let originalFetch: typeof globalThis.fetch;
+
+  beforeEach(() => {
+    originalFetch = globalThis.fetch;
+  });
+
+  afterEach(() => {
+    globalThis.fetch = originalFetch;
+    vi.restoreAllMocks();
+  });
+
+  it('dispatches lsv-booking-error on fetch failure', async () => {
+    globalThis.fetch = vi.fn().mockRejectedValue(new Error('Network error'));
+
+    const ctx = makeApiCtx();
+
+    const errorPromise = new Promise<CustomEvent>((resolve) => {
+      ctx.addEventListener('lsv-booking-error', (e) => resolve(e as CustomEvent));
+    });
+
+    await (LsvBooking.prototype as unknown as {
+      loadSlots: () => Promise<void>;
+    }).loadSlots.call(ctx);
+
+    const event = await errorPromise;
+    expect(event.detail).toHaveProperty('message');
+    expect(event.detail).toHaveProperty('step');
+  });
+
+  it('dispatches lsv-booking-error on booking submission failure', async () => {
+    globalThis.fetch = vi.fn().mockResolvedValue({
+      ok: false,
+      status: 409,
+      json: async () => ({ error: 'Time slot no longer available' }),
+    });
+
+    const ctx = makeApiCtx({ selectedSlot: slotFixture, selectedDate: '2026-04-15', selectedTime: '09:00' });
+
+    const errorPromise = new Promise<CustomEvent>((resolve) => {
+      ctx.addEventListener('lsv-booking-error', (e) => resolve(e as CustomEvent));
+    });
+
+    await (LsvBooking.prototype as unknown as {
+      submitBooking: (n: string, e: string, p: string, no: string) => Promise<void>;
+    }).submitBooking.call(ctx, 'Jane', 'jane@test.com', '', '');
+
+    const event = await errorPromise;
+    expect(event.detail.message).toBe('Time slot no longer available');
+  });
+});
+
+// ── Booking submission success tests ─────────────────────────────────────────
+
+describe('booking submission', () => {
+  let originalFetch: typeof globalThis.fetch;
+
+  beforeEach(() => {
+    originalFetch = globalThis.fetch;
+  });
+
+  afterEach(() => {
+    globalThis.fetch = originalFetch;
+    vi.restoreAllMocks();
+  });
+
+  it('dispatches lsv-booking-submitted with computed endAt', async () => {
+    globalThis.fetch = vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({ guestName: 'Jane', startAt: '2026-04-15T13:00:00.000Z' }),
+    });
+
+    const ctx = makeApiCtx({ selectedSlot: slotFixture, selectedDate: '2026-04-15', selectedTime: '09:00' });
+
+    const submitPromise = new Promise<CustomEvent>((resolve) => {
+      ctx.addEventListener('lsv-booking-submitted', (e) => resolve(e as CustomEvent));
+    });
+
+    await (LsvBooking.prototype as unknown as {
+      submitBooking: (n: string, e: string, p: string, no: string) => Promise<void>;
+    }).submitBooking.call(ctx, 'Jane', 'jane@test.com', '', '');
+
+    const event = await submitPromise;
+    expect(event.detail.slotTitle).toBe('Consult');
+    // endAt must be 30 minutes after startAt: 2026-04-15T13:30:00.000Z
+    expect(event.detail.endAt).toBe('2026-04-15T13:30:00.000Z');
+    expect(event.detail.endAt).not.toBe('');
+  });
+});

@@ -107,17 +107,33 @@ export class LsvBooking extends HTMLElement {
     this.render();
   }
 
+  // ── Signal helpers ────────────────────────────────────────────────────────
+
+  private getSignal(timeoutMs = 15_000): AbortSignal {
+    const timeoutSignal = AbortSignal.timeout(timeoutMs);
+    if (this.abortController?.signal) {
+      return AbortSignal.any([this.abortController.signal, timeoutSignal]);
+    }
+    return timeoutSignal;
+  }
+
   // ── API calls ─────────────────────────────────────────────────────────────
 
   private async loadSlots() {
     this.setLoading(true);
     try {
-      const res = await fetch(`${this.baseApiPath}/booking-slots`, { signal: this.abortController?.signal });
+      const res = await fetch(`${this.baseApiPath}/booking-slots`, { signal: this.getSignal() });
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
       const data = await res.json() as { slots: Slot[] };
       this.slots = data.slots;
       this.errorMsg = '';
-    } catch {
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : 'Failed to load booking slots. Please try again.';
+      this.dispatchEvent(new CustomEvent('lsv-booking-error', {
+        bubbles: true,
+        composed: true,
+        detail: { message: msg, step: 'slots' },
+      }));
       this.setError('Failed to load booking slots. Please try again.');
       return;
     }
@@ -130,13 +146,24 @@ export class LsvBooking extends HTMLElement {
     try {
       const res = await fetch(
         `${this.baseApiPath}/booking-slots/${slotId}/availability?date=${date}`,
-        { signal: this.abortController?.signal },
+        { signal: this.getSignal() },
       );
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
-      const data = await res.json() as { times: string[] };
-      this.availableTimes = data.times;
+      const data = await res.json() as { times: Array<{ startAt: string; endAt: string }> | string[] };
+      // Support both legacy string[] format and new object[] format (with startAt/endAt)
+      if (data.times.length > 0 && typeof data.times[0] === 'object') {
+        this.availableTimes = (data.times as Array<{ startAt: string }>).map((t) => t.startAt);
+      } else {
+        this.availableTimes = data.times as string[];
+      }
       this.errorMsg = '';
-    } catch {
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : 'Failed to load available times. Please try again.';
+      this.dispatchEvent(new CustomEvent('lsv-booking-error', {
+        bubbles: true,
+        composed: true,
+        detail: { message: msg, step: 'time' },
+      }));
       this.setError('Failed to load available times. Please try again.');
       return;
     }
@@ -155,9 +182,11 @@ export class LsvBooking extends HTMLElement {
 
     this.setLoading(true);
 
-    // Build ISO startAt from date + time
-    // API interprets startAt as UTC ISO string — timezone offset is intentional
-    const startAt = new Date(`${this.selectedDate}T${this.selectedTime}`).toISOString();
+    // Use the selected time directly if it's already a full ISO string (timezone-aware API),
+    // otherwise fall back to constructing from date + time for legacy HH:mm format.
+    const startAt = this.selectedTime.includes('T')
+      ? this.selectedTime
+      : new Date(`${this.selectedDate}T${this.selectedTime}`).toISOString();
     const slotId = this.selectedSlot.id;
 
     const body: Record<string, string> = {
@@ -175,7 +204,7 @@ export class LsvBooking extends HTMLElement {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify(body),
-          signal: this.abortController?.signal,
+          signal: this.getSignal(),
         },
       );
       if (!res.ok) {
@@ -187,14 +216,17 @@ export class LsvBooking extends HTMLElement {
       this.step = 'success';
       this.render();
 
-      // Dispatch success event
+      // Dispatch success event — compute endAt from startAt + durationMin
+      const startDate = new Date(result.startAt);
+      const endDate = new Date(startDate.getTime() + (this.selectedSlot.durationMin ?? 0) * 60 * 1000);
+
       this.dispatchEvent(new CustomEvent('lsv-booking-submitted', {
         bubbles: true,
         composed: true,
         detail: {
           bookingId: '',
           startAt: result.startAt,
-          endAt: '',
+          endAt: endDate.toISOString(),
           slotTitle: this.selectedSlot.title,
         },
       }));
@@ -296,19 +328,26 @@ export class LsvBooking extends HTMLElement {
   private renderStepIndicator(): HTMLElement {
     const steps: Step[] = ['slots', 'date', 'time', 'form'];
     const current = steps.indexOf(this.step);
-    const div = document.createElement('div');
-    div.className = 'step-indicator';
+    const nav = document.createElement('div');
+    nav.className = 'step-indicator';
+    nav.setAttribute('aria-label', 'Booking progress');
+    nav.setAttribute('role', 'navigation');
     steps.forEach((_, i) => {
+      const isActive = i === current;
       const dot = document.createElement('div');
-      dot.className = `step-dot${i === current ? ' active' : i < current ? ' done' : ''}`;
-      div.appendChild(dot);
+      dot.className = `step-dot${isActive ? ' active' : i < current ? ' done' : ''}`;
+      dot.setAttribute('aria-label', `Step ${i + 1}${isActive ? ' (current)' : ''}`);
+      if (isActive) dot.setAttribute('aria-current', 'step');
+      nav.appendChild(dot);
     });
-    return div;
+    return nav;
   }
 
   private renderLoading(): HTMLElement {
     const div = document.createElement('div');
     div.className = 'loading';
+    div.setAttribute('aria-live', 'polite');
+    div.setAttribute('role', 'status');
     const spinner = document.createElement('div');
     spinner.className = 'spinner';
     const text = document.createElement('span');
@@ -323,6 +362,8 @@ export class LsvBooking extends HTMLElement {
 
     const box = document.createElement('div');
     box.className = 'error-box';
+    box.setAttribute('aria-live', 'assertive');
+    box.setAttribute('role', 'alert');
     box.textContent = this.errorMsg;
     frag.appendChild(box);
 
@@ -404,6 +445,7 @@ export class LsvBooking extends HTMLElement {
     const back = document.createElement('button');
     back.className = 'btn-back';
     back.dataset.action = 'back-to-slots';
+    back.setAttribute('aria-label', 'Go back');
     back.textContent = '← Back';
     frag.appendChild(back);
 
@@ -439,6 +481,7 @@ export class LsvBooking extends HTMLElement {
       cell.className = `date-cell${!allowed ? ' disabled' : ''}${date === this.selectedDate ? ' selected' : ''}`;
       cell.textContent = new Date(`${date}T12:00:00`).getDate().toString();
       cell.title = label;
+      cell.setAttribute('aria-label', `Select ${label}`);
       if (allowed) {
         cell.dataset.action = 'select-date';
         cell.dataset.date = date;
@@ -461,6 +504,7 @@ export class LsvBooking extends HTMLElement {
     const back = document.createElement('button');
     back.className = 'btn-back';
     back.dataset.action = 'back-to-date';
+    back.setAttribute('aria-label', 'Go back');
     back.textContent = '← Back';
     frag.appendChild(back);
 
@@ -483,6 +527,9 @@ export class LsvBooking extends HTMLElement {
         btn.dataset.action = 'select-time';
         btn.dataset.time = t;
         btn.textContent = this.formatTime(t);
+        if (t === this.selectedTime) {
+          btn.setAttribute('aria-pressed', 'true');
+        }
         grid.appendChild(btn);
       });
       frag.appendChild(grid);
@@ -510,6 +557,7 @@ export class LsvBooking extends HTMLElement {
     const back = document.createElement('button');
     back.className = 'btn-back';
     back.dataset.action = 'back-to-time';
+    back.setAttribute('aria-label', 'Go back');
     back.textContent = '← Back';
     frag.appendChild(back);
 
