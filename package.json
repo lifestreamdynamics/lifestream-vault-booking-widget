@@ -1,6 +1,6 @@
 {
   "name": "@lifestreamdynamics/booking-widget",
-  "version": "0.1.3",
+  "version": "0.1.4",
   "description": "Embeddable booking widget Web Component for Lifestream Vault",
   "type": "module",
   "main": "dist/lsv-booking.umd.cjs",
