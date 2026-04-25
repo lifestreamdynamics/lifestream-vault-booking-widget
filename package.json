@@ -1,6 +1,6 @@
 {
   "name": "@lifestreamdynamics/booking-widget",
-  "version": "0.1.5",
+  "version": "0.1.6",
   "description": "Embeddable booking widget Web Component for Lifestream Vault",
   "engines": {
     "node": ">=22"
