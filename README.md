@@ -65,7 +65,7 @@ element.addEventListener('lsv-booking-submitted', (event) => {
 
 | Field        | Type     | Description                        |
 |--------------|----------|------------------------------------|
-| `bookingId`  | `string` | ID of the created booking.         |
+| `bookingId`  | `string` | Currently always an empty string (the public booking-confirm endpoint does not return a booking ID). |
 | `startAt`    | `string` | ISO 8601 start timestamp.          |
 | `endAt`      | `string` | ISO 8601 end timestamp.            |
 | `slotTitle`  | `string` | Title of the booked slot.          |
